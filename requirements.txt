@@ -2,4 +2,3 @@ flask
 groq
 edge-tts
 pydub
-audioop-lts
