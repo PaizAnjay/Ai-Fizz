@@ -34,3 +34,53 @@ TTS_VOICE = "id-ID-GadisNeural"  # suara wanita Bahasa Indonesia. Suara pria: "i
 
 
 @app.route("/", defaults={"req_path": ""}, methods=["GET", "POST"])
+@app.route("/<path:req_path>", methods=["GET", "POST"])
+def handle_request(req_path):
+    if request.method == "GET":
+        return "OK", 200
+    return process_chat()
+
+
+async def text_to_speech_pcm(text: str) -> bytes:
+    """Ubah teks jadi audio PCM mentah (16-bit mono) sesuai SPK_SAMPLE_RATE."""
+    communicate = edge_tts.Communicate(text, TTS_VOICE)
+    mp3_bytes = b""
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            mp3_bytes += chunk["data"]
+
+    wav_buffer = io.BytesIO()
+    with wave.open(wav_buffer, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(MIC_SAMPLE_RATE)
+        wf.writeframes(raw_pcm)
+    wav_buffer.seek(0)
+    wav_buffer.name = "audio.wav"
+
+    # 1. Speech to text (Groq, gratis)
+    transcript = groq_client.audio.transcriptions.create(
+        model="whisper-large-v3-turbo",
+        file=wav_buffer,
+    )
+    user_text = transcript.text
+    print("User bilang:", user_text)
+
+    # 2. Chat AI (Groq, gratis)
+    completion = groq_client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[
+            {"role": "system", "content": "Jawab singkat, ramah, dan dalam Bahasa Indonesia."},
+            {"role": "user", "content": user_text},
+        ],
+    )
+    reply_text = completion.choices[0].message.content
+    print("AI jawab:", reply_text)
+
+    # 3. Text to speech (edge-tts, gratis)
+    pcm_audio = asyncio.run(text_to_speech_pcm(reply_text))
+
+    return Response(pcm_audio, mimetype="application/octet-stream")
+
+
+# Vercel mendeteksi variabel bernama `app` ini secara otomatis sebagai WSGI app
